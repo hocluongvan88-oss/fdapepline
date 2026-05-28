@@ -1,0 +1,575 @@
+'use client'
+
+import { useState, useEffect } from 'react'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Progress } from '@/components/ui/progress'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { createClient } from '@/lib/supabase/client'
+import { 
+  PIPELINE_STAGES, 
+  getServiceTypeLabel,
+  getStageIndex,
+  type Service,
+  type PipelineTask,
+  type Document,
+} from '@/lib/types'
+import {
+  Utensils,
+  Sparkles,
+  Stethoscope,
+  User,
+  FileText,
+  Download,
+  Upload,
+  Clock,
+  CheckCircle,
+  AlertTriangle,
+  Building2,
+  Shield,
+  ArrowLeft,
+  Loader2,
+} from 'lucide-react'
+import Link from 'next/link'
+
+function getServiceIcon(type: string) {
+  switch (type) {
+    case 'food':
+      return <Utensils className="h-5 w-5" />
+    case 'cosmetics':
+      return <Sparkles className="h-5 w-5" />
+    case 'medical_device':
+      return <Stethoscope className="h-5 w-5" />
+    default:
+      return null
+  }
+}
+
+function getServiceTypeBadgeClass(type: string) {
+  switch (type) {
+    case 'food':
+      return 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+    case 'cosmetics':
+      return 'bg-fuchsia-500/20 text-fuchsia-400 border-fuchsia-500/30'
+    case 'medical_device':
+      return 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30'
+    default:
+      return 'bg-muted text-muted-foreground'
+  }
+}
+
+function formatDate(dateStr: string | null): string {
+  if (!dateStr) return 'N/A'
+  return new Date(dateStr).toLocaleDateString('vi-VN', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric'
+  })
+}
+
+function getDaysUntilExpiry(dateStr: string): number {
+  const expiryDate = new Date(dateStr)
+  const today = new Date()
+  const diffTime = expiryDate.getTime() - today.getTime()
+  return Math.ceil(diffTime / (1000 * 60 * 60 * 24))
+}
+
+function getExpiryStatus(days: number): 'expired' | 'critical' | 'warning' | 'normal' {
+  if (days <= 0) return 'expired'
+  if (days <= 30) return 'critical'
+  if (days <= 90) return 'warning'
+  return 'normal'
+}
+
+interface ServiceDetailProps {
+  serviceId: string
+}
+
+export function ServiceDetail({ serviceId }: ServiceDetailProps) {
+  const [service, setService] = useState<Service | null>(null)
+  const [tasks, setTasks] = useState<PipelineTask[]>([])
+  const [documents, setDocuments] = useState<Document[]>([])
+  const [isLoading, setIsLoading] = useState(true)
+
+  useEffect(() => {
+    async function fetchData() {
+      const supabase = createClient()
+      
+      // Fetch service
+      const { data: serviceData, error: serviceError } = await supabase
+        .from('services')
+        .select(`
+          *,
+          client:profiles!services_client_id_fkey(*),
+          assigned_staff:profiles!services_assigned_staff_id_fkey(*)
+        `)
+        .eq('id', serviceId)
+        .single()
+
+      if (serviceError) {
+        console.error('[v0] Error fetching service:', serviceError)
+        setIsLoading(false)
+        return
+      }
+
+      setService(serviceData as Service)
+
+      // Fetch tasks
+      const { data: tasksData } = await supabase
+        .from('pipeline_tasks')
+        .select('*')
+        .eq('service_id', serviceId)
+        .order('stage')
+        .order('sort_order')
+
+      if (tasksData) {
+        setTasks(tasksData as PipelineTask[])
+      }
+
+      // Fetch documents
+      const { data: docsData } = await supabase
+        .from('documents')
+        .select(`
+          *,
+          uploader:profiles!documents_uploaded_by_fkey(*)
+        `)
+        .eq('service_id', serviceId)
+        .order('created_at', { ascending: false })
+
+      if (docsData) {
+        setDocuments(docsData as Document[])
+      }
+
+      setIsLoading(false)
+    }
+
+    fetchData()
+  }, [serviceId])
+
+  const toggleTask = async (taskId: string, isCompleted: boolean) => {
+    const supabase = createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    
+    const { error } = await supabase
+      .from('pipeline_tasks')
+      .update({
+        is_completed: !isCompleted,
+        completed_at: !isCompleted ? new Date().toISOString() : null,
+        completed_by: !isCompleted ? user?.id : null
+      })
+      .eq('id', taskId)
+
+    if (!error) {
+      setTasks(prev =>
+        prev.map(t => t.id === taskId ? { ...t, is_completed: !isCompleted } : t)
+      )
+    }
+  }
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-96">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    )
+  }
+
+  if (!service) {
+    return (
+      <div className="flex flex-col items-center justify-center h-96 text-muted-foreground">
+        <AlertTriangle className="h-12 w-12 mb-4" />
+        <p>Không tìm thấy dịch vụ</p>
+        <Link href="/dashboard/pipeline">
+          <Button variant="link" className="mt-2">Quay lại Pipeline</Button>
+        </Link>
+      </div>
+    )
+  }
+
+  const currentStageIndex = getStageIndex(service.current_stage)
+  const currentStage = PIPELINE_STAGES[currentStageIndex]
+  const completedTasks = tasks.filter(t => t.is_completed).length
+  const totalTasks = tasks.length
+  const progress = totalTasks > 0 ? (completedTasks / totalTasks) * 100 : 0
+
+  const fdaDaysUntilExpiry = service.fda_expiry_date ? getDaysUntilExpiry(service.fda_expiry_date) : null
+  const fdaExpiryStatus = fdaDaysUntilExpiry !== null ? getExpiryStatus(fdaDaysUntilExpiry) : null
+
+  const agentDaysUntilExpiry = service.us_agent_expiry_date ? getDaysUntilExpiry(service.us_agent_expiry_date) : null
+  const agentExpiryStatus = agentDaysUntilExpiry !== null ? getExpiryStatus(agentDaysUntilExpiry) : null
+
+  return (
+    <div className="space-y-6">
+      {/* Back Button */}
+      <Link href="/dashboard/pipeline">
+        <Button variant="ghost" size="sm" className="gap-2">
+          <ArrowLeft className="h-4 w-4" />
+          Quay lại Pipeline
+        </Button>
+      </Link>
+
+      {/* Header */}
+      <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
+        <div className="space-y-2">
+          <div className="flex items-center gap-3">
+            <Badge
+              variant="outline"
+              className={`${getServiceTypeBadgeClass(service.service_type)}`}
+            >
+              {getServiceIcon(service.service_type)}
+              <span className="ml-1">{getServiceTypeLabel(service.service_type)}</span>
+            </Badge>
+            <Badge variant="secondary">
+              Giai đoạn {currentStageIndex + 1}/7
+            </Badge>
+          </div>
+          <h1 className="text-2xl font-bold text-foreground">{service.product_name}</h1>
+          <div className="flex items-center gap-4 text-sm text-muted-foreground">
+            <div className="flex items-center gap-1">
+              <Building2 className="h-4 w-4" />
+              <span>{service.client?.company_name || service.client?.full_name || 'N/A'}</span>
+            </div>
+            {service.assigned_staff && (
+              <div className="flex items-center gap-1">
+                <User className="h-4 w-4" />
+                <span>Phụ trách: {service.assigned_staff.full_name || 'Staff'}</span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="flex gap-2">
+          <Button variant="outline">Liên hệ hỗ trợ</Button>
+          <Button>Cập nhật thông tin</Button>
+        </div>
+      </div>
+
+      {/* Pipeline Progress */}
+      <Card className="bg-card border-border">
+        <CardHeader>
+          <CardTitle className="text-foreground">Tiến độ Pipeline</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="relative">
+            {/* Progress Line */}
+            <div className="absolute top-4 left-0 right-0 h-0.5 bg-border">
+              <div
+                className="h-full bg-primary transition-all"
+                style={{ width: `${(currentStageIndex / 6) * 100}%` }}
+              />
+            </div>
+
+            {/* Stages */}
+            <div className="relative flex justify-between">
+              {PIPELINE_STAGES.map((stage, index) => {
+                const isCompleted = currentStageIndex > index
+                const isCurrent = currentStageIndex === index
+
+                return (
+                  <div
+                    key={stage.value}
+                    className="flex flex-col items-center"
+                  >
+                    <div
+                      className={`flex h-8 w-8 items-center justify-center rounded-full border-2 transition-colors ${
+                        isCompleted
+                          ? 'bg-primary border-primary text-primary-foreground'
+                          : isCurrent
+                          ? 'bg-primary/20 border-primary text-primary'
+                          : 'bg-background border-border text-muted-foreground'
+                      }`}
+                    >
+                      {isCompleted ? (
+                        <CheckCircle className="h-4 w-4" />
+                      ) : (
+                        <span className="text-xs font-medium">{index + 1}</span>
+                      )}
+                    </div>
+                    <span
+                      className={`mt-2 text-xs text-center max-w-[80px] ${
+                        isCurrent ? 'text-primary font-medium' : 'text-muted-foreground'
+                      }`}
+                    >
+                      {stage.label}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Main Content */}
+      <div className="grid gap-6 lg:grid-cols-3">
+        {/* Left Column - Details & Checklist */}
+        <div className="lg:col-span-2 space-y-6">
+          <Tabs defaultValue="checklist" className="w-full">
+            <TabsList className="grid w-full grid-cols-3">
+              <TabsTrigger value="checklist">Checklist</TabsTrigger>
+              <TabsTrigger value="documents">Tài liệu</TabsTrigger>
+              <TabsTrigger value="history">Lịch sử</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="checklist" className="mt-4">
+              <Card className="bg-card border-border">
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-foreground">Checklist công việc</CardTitle>
+                    <span className="text-sm text-muted-foreground">
+                      {completedTasks}/{totalTasks} hoàn thành
+                    </span>
+                  </div>
+                  <Progress value={progress} className="h-2" />
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {tasks.length === 0 ? (
+                    <div className="text-center py-8 text-muted-foreground">
+                      <CheckCircle className="h-12 w-12 mx-auto mb-2 opacity-50" />
+                      <p className="text-sm">Chưa có checklist</p>
+                    </div>
+                  ) : (
+                    tasks.map((task) => (
+                      <div
+                        key={task.id}
+                        className={`flex items-center gap-3 p-3 rounded-lg cursor-pointer ${
+                          task.is_completed ? 'bg-success/10' : 'bg-secondary'
+                        }`}
+                        onClick={() => toggleTask(task.id, task.is_completed)}
+                      >
+                        <Checkbox
+                          checked={task.is_completed}
+                          className="data-[state=checked]:bg-success data-[state=checked]:border-success"
+                        />
+                        <span
+                          className={`text-sm ${
+                            task.is_completed
+                              ? 'text-muted-foreground line-through'
+                              : 'text-foreground'
+                          }`}
+                        >
+                          {task.title}
+                        </span>
+                      </div>
+                    ))
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="documents" className="mt-4">
+              <Card className="bg-card border-border">
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-foreground">Tài liệu</CardTitle>
+                    <Button size="sm" className="gap-2">
+                      <Upload className="h-4 w-4" />
+                      Tải lên
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {documents.length === 0 ? (
+                    <div className="text-center py-8 text-muted-foreground">
+                      <FileText className="h-12 w-12 mx-auto mb-2 opacity-50" />
+                      <p>Chưa có tài liệu nào</p>
+                    </div>
+                  ) : (
+                    documents.map((doc) => (
+                      <div
+                        key={doc.id}
+                        className="flex items-center justify-between p-3 rounded-lg bg-secondary"
+                      >
+                        <div className="flex items-center gap-3">
+                          <FileText className="h-5 w-5 text-primary" />
+                          <div>
+                            <p className="text-sm font-medium text-foreground">{doc.file_name}</p>
+                            <p className="text-xs text-muted-foreground">
+                              Tải lên: {formatDate(doc.created_at)}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Badge variant={doc.document_type === 'result' ? 'default' : 'secondary'}>
+                            {doc.document_type === 'result' ? 'Kết quả' : 'Yêu cầu'}
+                          </Badge>
+                          {doc.file_url && (
+                            <Button variant="ghost" size="icon" asChild>
+                              <a href={doc.file_url} target="_blank" rel="noopener noreferrer">
+                                <Download className="h-4 w-4" />
+                              </a>
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="history" className="mt-4">
+              <Card className="bg-card border-border">
+                <CardHeader>
+                  <CardTitle className="text-foreground">Lịch sử hoạt động</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-4">
+                    <div className="flex gap-3">
+                      <div className="flex flex-col items-center">
+                        <div className="h-2 w-2 rounded-full bg-primary" />
+                        <div className="w-0.5 flex-1 bg-border" />
+                      </div>
+                      <div className="pb-4">
+                        <p className="text-sm font-medium text-foreground">Cập nhật trạng thái</p>
+                        <p className="text-xs text-muted-foreground">
+                          Chuyển sang giai đoạn &quot;{currentStage?.label}&quot;
+                        </p>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          {formatDate(service.updated_at)}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex gap-3">
+                      <div className="flex flex-col items-center">
+                        <div className="h-2 w-2 rounded-full bg-muted" />
+                        <div className="w-0.5 flex-1 bg-border" />
+                      </div>
+                      <div className="pb-4">
+                        <p className="text-sm font-medium text-foreground">Tiếp nhận yêu cầu</p>
+                        <p className="text-xs text-muted-foreground">
+                          Đã tiếp nhận và bắt đầu xử lý
+                        </p>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          {formatDate(service.created_at)}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+          </Tabs>
+        </div>
+
+        {/* Right Column - Info Cards */}
+        <div className="space-y-6">
+          {/* FDA Registration Info */}
+          <Card className="bg-card border-border">
+            <CardHeader>
+              <CardTitle className="text-foreground flex items-center gap-2">
+                <Shield className="h-5 w-5 text-primary" />
+                Thông tin FDA
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {service.fda_code ? (
+                <>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Mã đăng ký FDA</p>
+                    <p className="font-mono text-sm text-primary">{service.fda_code}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Ngày cấp</p>
+                    <p className="text-sm text-foreground">
+                      {formatDate(service.fda_issue_date)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Ngày hết hạn</p>
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm text-foreground">
+                        {formatDate(service.fda_expiry_date)}
+                      </p>
+                      {fdaExpiryStatus && fdaExpiryStatus !== 'normal' && (
+                        <Badge
+                          variant={fdaExpiryStatus === 'expired' || fdaExpiryStatus === 'critical' ? 'destructive' : 'secondary'}
+                          className={fdaExpiryStatus === 'warning' ? 'bg-warning text-warning-foreground' : ''}
+                        >
+                          {fdaExpiryStatus === 'expired'
+                            ? 'Đã hết hạn'
+                            : `${fdaDaysUntilExpiry} ngày`}
+                        </Badge>
+                      )}
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div className="text-center py-4 text-muted-foreground">
+                  <Clock className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                  <p className="text-sm">Chưa có mã FDA</p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* US Agent Info */}
+          <Card className="bg-card border-border">
+            <CardHeader>
+              <CardTitle className="text-foreground flex items-center gap-2">
+                <User className="h-5 w-5 text-primary" />
+                Thông tin US Agent
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {service.us_agent_name ? (
+                <>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Tên US Agent</p>
+                    <p className="text-sm text-foreground">{service.us_agent_name}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Ngày hết hạn</p>
+                    <div className="flex items-center gap-2">
+                      <p className="text-sm text-foreground">
+                        {formatDate(service.us_agent_expiry_date)}
+                      </p>
+                      {agentExpiryStatus && agentExpiryStatus !== 'normal' && (
+                        <Badge
+                          variant={agentExpiryStatus === 'expired' || agentExpiryStatus === 'critical' ? 'destructive' : 'secondary'}
+                          className={agentExpiryStatus === 'warning' ? 'bg-warning text-warning-foreground' : ''}
+                        >
+                          {agentExpiryStatus === 'expired'
+                            ? 'Đã hết hạn'
+                            : `${agentDaysUntilExpiry} ngày`}
+                        </Badge>
+                      )}
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div className="text-center py-4 text-muted-foreground">
+                  <User className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                  <p className="text-sm">Chưa chỉ định US Agent</p>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Quick Actions */}
+          <Card className="bg-card border-border">
+            <CardHeader>
+              <CardTitle className="text-foreground">Thao tác nhanh</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              <Button variant="outline" className="w-full justify-start gap-2">
+                <Upload className="h-4 w-4" />
+                Tải lên tài liệu
+              </Button>
+              <Button variant="outline" className="w-full justify-start gap-2">
+                <Download className="h-4 w-4" />
+                Tải chứng nhận FDA
+              </Button>
+              <Button variant="outline" className="w-full justify-start gap-2">
+                <AlertTriangle className="h-4 w-4" />
+                Yêu cầu gia hạn
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    </div>
+  )
+}

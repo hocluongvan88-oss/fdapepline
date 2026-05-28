@@ -1,107 +1,190 @@
 'use client'
 
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import { cn } from '@/lib/utils'
 import {
-  ShieldCheck,
   LayoutDashboard,
+  Kanban,
   FileText,
-  FolderOpen,
   Bell,
   Settings,
-  X,
+  HelpCircle,
+  LogOut,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useState } from 'react'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
+import { createClient } from '@/lib/supabase/client'
 
-const navigation = [
-  { name: 'Tổng quan', href: '/dashboard', icon: LayoutDashboard },
-  { name: 'Dịch vụ', href: '/dashboard/services', icon: FileText },
-  { name: 'Tài liệu', href: '/dashboard/documents', icon: FolderOpen },
-  { name: 'Thông báo', href: '/dashboard/notifications', icon: Bell },
-  { name: 'Cài đặt', href: '/dashboard/settings', icon: Settings },
+const navItems = [
+  { href: '/dashboard', icon: LayoutDashboard, label: 'Tổng quan' },
+  { href: '/dashboard/pipeline', icon: Kanban, label: 'Pipeline' },
+  { href: '/dashboard/documents', icon: FileText, label: 'Tài liệu' },
+  { href: '/dashboard/notifications', icon: Bell, label: 'Thông báo' },
+  { href: '/dashboard/settings', icon: Settings, label: 'Cài đặt' },
 ]
 
-export function DashboardSidebar() {
+const bottomItems = [
+  { href: '/help', icon: HelpCircle, label: 'Trợ giúp' },
+]
+
+export function Sidebar() {
   const pathname = usePathname()
-  const [mobileOpen, setMobileOpen] = useState(false)
+  const router = useRouter()
+  const [collapsed, setCollapsed] = useState(false)
+
+  const handleLogout = async () => {
+    const supabase = createClient()
+    await supabase.auth.signOut()
+    router.push('/auth/login')
+    router.refresh()
+  }
 
   return (
-    <>
-      {/* Mobile sidebar backdrop */}
-      {mobileOpen && (
-        <div
-          className="fixed inset-0 bg-foreground/50 z-40 lg:hidden"
-          onClick={() => setMobileOpen(false)}
-        />
-      )}
-
-      {/* Mobile menu button */}
-      <Button
-        variant="ghost"
-        size="icon"
-        className="fixed top-4 left-4 z-50 lg:hidden"
-        onClick={() => setMobileOpen(!mobileOpen)}
-      >
-        <LayoutDashboard className="h-5 w-5" />
-      </Button>
-
-      {/* Sidebar */}
+    <TooltipProvider delayDuration={0}>
       <aside
         className={cn(
-          'fixed inset-y-0 left-0 z-50 w-64 bg-sidebar text-sidebar-foreground transform transition-transform duration-200 ease-in-out lg:translate-x-0',
-          mobileOpen ? 'translate-x-0' : '-translate-x-full'
+          'fixed left-0 top-0 z-40 h-screen bg-sidebar border-r border-sidebar-border transition-all duration-300',
+          collapsed ? 'w-16' : 'w-64'
         )}
       >
-        <div className="flex h-16 items-center justify-between px-6 border-b border-sidebar-border">
-          <Link href="/dashboard" className="flex items-center gap-2">
-            <ShieldCheck className="h-7 w-7 text-sidebar-primary" />
-            <span className="text-lg font-bold">Vexim Global</span>
-          </Link>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="lg:hidden text-sidebar-foreground hover:bg-sidebar-accent"
-            onClick={() => setMobileOpen(false)}
-          >
-            <X className="h-5 w-5" />
-          </Button>
-        </div>
-
-        <nav className="flex flex-col gap-1 p-4">
-          {navigation.map((item) => {
-            const isActive = pathname === item.href || 
-              (item.href !== '/dashboard' && pathname.startsWith(item.href))
-            
-            return (
-              <Link
-                key={item.name}
-                href={item.href}
-                onClick={() => setMobileOpen(false)}
-                className={cn(
-                  'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors',
-                  isActive
-                    ? 'bg-sidebar-primary text-sidebar-primary-foreground'
-                    : 'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
-                )}
-              >
-                <item.icon className="h-5 w-5" />
-                {item.name}
+        <div className="flex h-full flex-col">
+          {/* Logo */}
+          <div className={cn(
+            'flex h-16 items-center border-b border-sidebar-border px-4',
+            collapsed ? 'justify-center' : 'justify-between'
+          )}>
+            {!collapsed && (
+              <Link href="/dashboard" className="flex items-center gap-2">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary">
+                  <span className="text-sm font-bold text-primary-foreground">VX</span>
+                </div>
+                <span className="text-lg font-semibold text-sidebar-foreground">Vexim Global</span>
               </Link>
-            )
-          })}
-        </nav>
+            )}
+            {collapsed && (
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary">
+                <span className="text-sm font-bold text-primary-foreground">VX</span>
+              </div>
+            )}
+          </div>
 
-        <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-sidebar-border">
-          <div className="rounded-lg bg-sidebar-accent p-4">
-            <p className="text-xs text-sidebar-foreground/70">Cần hỗ trợ?</p>
-            <p className="mt-1 text-sm font-medium text-sidebar-foreground">
-              Liên hệ: 1900-xxxx
-            </p>
+          {/* Navigation */}
+          <nav className="flex-1 space-y-1 p-2">
+            {navItems.map((item) => {
+              const isActive = pathname === item.href || pathname.startsWith(item.href + '/')
+              const Icon = item.icon
+
+              const linkContent = (
+                <Link
+                  href={item.href}
+                  className={cn(
+                    'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors',
+                    isActive
+                      ? 'bg-sidebar-accent text-sidebar-primary'
+                      : 'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground'
+                  )}
+                >
+                  <Icon className="h-5 w-5 shrink-0" />
+                  {!collapsed && <span>{item.label}</span>}
+                </Link>
+              )
+
+              if (collapsed) {
+                return (
+                  <Tooltip key={item.href}>
+                    <TooltipTrigger asChild>
+                      {linkContent}
+                    </TooltipTrigger>
+                    <TooltipContent side="right" className="bg-popover text-popover-foreground">
+                      {item.label}
+                    </TooltipContent>
+                  </Tooltip>
+                )
+              }
+
+              return <div key={item.href}>{linkContent}</div>
+            })}
+          </nav>
+
+          {/* Bottom Section */}
+          <div className="border-t border-sidebar-border p-2">
+            {bottomItems.map((item) => {
+              const Icon = item.icon
+              const linkContent = (
+                <Link
+                  href={item.href}
+                  className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors"
+                >
+                  <Icon className="h-5 w-5 shrink-0" />
+                  {!collapsed && <span>{item.label}</span>}
+                </Link>
+              )
+
+              if (collapsed) {
+                return (
+                  <Tooltip key={item.href}>
+                    <TooltipTrigger asChild>
+                      {linkContent}
+                    </TooltipTrigger>
+                    <TooltipContent side="right" className="bg-popover text-popover-foreground">
+                      {item.label}
+                    </TooltipContent>
+                  </Tooltip>
+                )
+              }
+
+              return <div key={item.href}>{linkContent}</div>
+            })}
+
+            {/* Logout Button */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button 
+                  onClick={handleLogout}
+                  className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-sidebar-foreground/70 hover:bg-destructive/10 hover:text-destructive transition-colors"
+                >
+                  <LogOut className="h-5 w-5 shrink-0" />
+                  {!collapsed && <span>Đăng xuất</span>}
+                </button>
+              </TooltipTrigger>
+              {collapsed && (
+                <TooltipContent side="right" className="bg-popover text-popover-foreground">
+                  Đăng xuất
+                </TooltipContent>
+              )}
+            </Tooltip>
+
+            {/* Collapse Button */}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setCollapsed(!collapsed)}
+              className={cn(
+                'mt-2 w-full justify-center text-sidebar-foreground/50 hover:text-sidebar-foreground hover:bg-sidebar-accent',
+                collapsed && 'px-0'
+              )}
+            >
+              {collapsed ? (
+                <ChevronRight className="h-4 w-4" />
+              ) : (
+                <>
+                  <ChevronLeft className="h-4 w-4 mr-2" />
+                  <span>Thu gọn</span>
+                </>
+              )}
+            </Button>
           </div>
         </div>
       </aside>
-    </>
+    </TooltipProvider>
   )
 }
